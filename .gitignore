@@ -1,0 +1,14 @@
+# colcon artifacts (never build inside the repo, but just in case)
+build/
+install/
+log/
+
+# generated at launch from ros2_controllers_template.yaml
+rover_description/config/*/ros2_controllers.yaml
+
+# editor / OS noise
+.vscode/
+.idea/
+*.pyc
+__pycache__/
+.DS_Store
