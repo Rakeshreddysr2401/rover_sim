@@ -14,7 +14,8 @@ Launched Controllers:
 """
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
+from launch.actions import RegisterEventHandler, TimerAction
+from launch_ros.actions import Node
 from launch.event_handlers import OnProcessExit
 
 
@@ -27,23 +28,28 @@ def generate_launch_description():
     Returns:
         LaunchDescription: Launch description containing sequenced controller starts
     """
-    # Start mecanum drive controller
-    start_mecanum_drive_controller_cmd = ExecuteProcess(
-        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
-             'mecanum_drive_controller'],
+    # Use controller_manager's spawner (waits for the controller manager and
+    # retries) instead of one-shot `ros2 control` CLI calls — a fixed delay
+    # missed on slow bringups (GUI + house world) and left controllers unloaded.
+    start_mecanum_drive_controller_cmd = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['mecanum_drive_controller',
+                   '--controller-manager-timeout', '120'],
         output='screen'
     )
 
-    # Start joint state broadcaster
-    start_joint_state_broadcaster_cmd = ExecuteProcess(
-        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
-             'joint_state_broadcaster'],
+    start_joint_state_broadcaster_cmd = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster',
+                   '--controller-manager-timeout', '120'],
         output='screen'
     )
 
-    # Add delay to joint state broadcaster (if necessary)
+    # Small grace period, then the spawner itself waits as long as needed.
     delayed_start = TimerAction(
-        period=25.0,
+        period=5.0,
         actions=[start_joint_state_broadcaster_cmd]
     )
 

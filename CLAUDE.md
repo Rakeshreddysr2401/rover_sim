@@ -13,6 +13,23 @@ cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.
 ./src/rover_sim/rover_bringup/scripts/rosmaster_x3_navigation.sh    # sim + nav2 (add "slam" arg for SLAM)
 ```
 
+## Fleet start (one command)
+
+The whole robot starts from the Pi5: `~/ros2_ws/scripts/fleet.sh {sim|rover|stop|status}`.
+In `sim` mode the Pi5 sshes here and runs this repo's fleet member script, which also works
+directly on this laptop:
+
+```bash
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh start    # GUI if logged in, headless over ssh
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh status   # "2/2 active controllers" = drive ready
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh stop
+# env: WORLD=house|cafe  MODE=slam|map  (map mode auto-localizes at the spawn pose)
+```
+
+`fleet_sim.sh start` joins the Pi5 discovery server automatically when the Pi5 resolves,
+else starts standalone. Requires sshd here (installed + enabled 2026-07-07) with the Pi5's
+key in `~/.ssh/authorized_keys` (done). Logs: `/workspace/ros2_ws/logs/fleet_sim.log`.
+
 - cmd_vel is **TwistStamped** on `/mecanum_drive_controller/cmd_vel`; plain `/cmd_vel` only
   exists when Nav2 is up (relay restamps it).
 - `house.world` ≈ 0.1 RTF on this iGPU laptop; `empty.world` ≈ 1.0 RTF.

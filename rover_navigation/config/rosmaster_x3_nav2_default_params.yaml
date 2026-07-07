@@ -26,6 +26,14 @@ amcl:
     recovery_alpha_slow: 0.0
     resample_interval: 1
     robot_model_type: "nav2_amcl::OmniMotionModel" # Use "nav2_amcl::DifferentialMotionModel" if you have a differential drive robot
+    # Auto-localize at the sim spawn pose so map mode works headless (no RViz
+    # "2D Pose Estimate" click needed). Matches fleet_sim.sh spawn x/y/yaw.
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true # map to odom frame transform
