@@ -15,7 +15,9 @@ cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.
 
 ## Fleet start (one command)
 
-The whole robot starts from the Pi5: `~/ros2_ws/scripts/fleet.sh {sim|rover|stop|status}`.
+The whole robot starts from the Pi5: `~/ros2_ws/scripts/fleet.sh {sim|rover|stop|down|status}`
+(`stop` parks the body but keeps the brain/Telegram up; `down` is a full shutdown incl. the
+Pi5 services).
 In `sim` mode the Pi5 sshes here and runs this repo's fleet member script, which also works
 directly on this laptop:
 
