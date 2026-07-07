@@ -10,9 +10,11 @@ is listed here; anything else is internal to the sim and will not exist on the r
 |---|---|---|---|
 | `/scan` | `sensor_msgs/LaserScan` | 10 Hz | 2D lidar, frame `laser_frame` |
 | `/imu/data` | `sensor_msgs/Imu` | 15 Hz | frame `imu_frame` |
-| `/cam_1/color/image_raw` | `sensor_msgs/Image` | 2 Hz | RGB image |
+| `/cam_1/color/image_raw` | `sensor_msgs/Image` | 15 Hz | RGB image |
 | `/cam_1/color/camera_info` | `sensor_msgs/CameraInfo` | with image | intrinsics |
-| `/cam_1/depth/color/points` | `sensor_msgs/PointCloud2` | 2 Hz | RGBD point cloud, camera frame |
+| `/cam_1/depth/image_rect_raw` | `sensor_msgs/Image` | 15 Hz | depth, 32FC1 meters, frame `cam_1_depth_optical_frame`, 8 m range — nvblox input; names mirror RealSense D555 |
+| `/cam_1/depth/camera_info` | `sensor_msgs/CameraInfo` | with image | depth intrinsics (same sensor as color) |
+| `/cam_1/depth/color/points` | `sensor_msgs/PointCloud2` | 15 Hz | RGBD point cloud, camera frame |
 | `/mecanum_drive_controller/odom` | `nav_msgs/Odometry` | 50 Hz | wheel odometry |
 | `/odometry/filtered` | `nav_msgs/Odometry` | 30 Hz | EKF-fused odom (only when nav stack is up) |
 | `/joint_states`, `/tf`, `/tf_static` | — | — | standard state broadcasting |
@@ -37,29 +39,38 @@ is listed here; anything else is internal to the sim and will not exist on the r
 ## Frames (REP-105)
 
 `map` → `odom` → `base_footprint` → `base_link` → sensor frames
-(`laser_frame`, `cam_1_link`, `cam_1_depth_frame`, `imu_frame`).
+(`laser_frame`, `cam_1_link`, `cam_1_depth_optical_frame`, `imu_frame`).
 `map→odom` exists only when SLAM/AMCL is running.
 
-## Multi-machine setup
+## Multi-machine setup (Fast DDS Discovery Server)
 
-All machines must share the same `ROS_DOMAIN_ID` (default **0** everywhere today) and be on
-the same LAN for DDS discovery.
+The fleet does not rely on multicast discovery. A Fast DDS Discovery Server runs on the Pi5
+(`langrobo-discovery.service`, port 11811); every machine joins it by mDNS name. Full design:
+Pi5 `~/ros2_ws/NETWORKING.md`.
 
-| Machine | Role | LAN wifi IP | Ethernet/robot net |
+On this laptop, before launching the sim for fleet-connected work:
+
+```bash
+export ROS_DISCOVERY_SERVER=rakhi24-desktop.local:11811
+```
+
+| Machine | Role | mDNS name | wifi IP (dhcp, don't hardcode) |
 |---|---|---|---|
-| This laptop | Gazebo sim (this repo) | 192.168.1.12 (dhcp — verify) | — |
-| Pi 5 | LangGraph brain (`pi5_ros2_ws`) | 192.168.1.16 | 192.168.2.10 |
-| Jetson Orin | speech + Isaac ROS (`speech_vision`) | 192.168.1.15 | 192.168.2.20 |
+| This laptop | Gazebo sim (this repo) | — | 192.168.1.12 |
+| Pi 5 | LangGraph brain (`pi5_ros2_ws` → `~/ros2_ws`) | `rakhi24-desktop.local` | 192.168.1.16 |
+| Jetson Orin | speech + Isaac ROS (`speech_vision` → `~/robot`) | `rakhi-jetson.local` | 192.168.1.15 |
 
-Quick cross-machine check: `ros2 topic list` on the Pi 5 should show `/scan` while the sim
-runs here.
+`ROS_DOMAIN_ID=0` everywhere. Verify links by **echoing a continuously published topic**
+(e.g. `/scan` while the sim runs) — `ros2 node list` through the discovery server returns
+empty on this Jazzy build even when pub/sub works (verified 2026-07-06).
 
-### Known integration gaps (as of 2026-07-06)
+### Known integration gaps (as of 2026-07-07)
 
-- Pi 5 `ai_agent/agent_node.py` listens on `voice_text`, but the Jetson STT publishes
-  `/voice/user_input` — the Pi 5 side needs to be updated to match the Jetson.
-- Pi 5 brain does not yet publish `cmd_vel` or call `navigate_to_pose`; when it does, use the
-  action (preferred) or `/cmd_vel` while Nav2 is up.
-- Isaac ROS pipelines (nvblox, visual SLAM, YOLOv8) on the Jetson expect RealSense-style
-  input; the sim camera topics (`/cam_1/color/*`, `/cam_1/depth/color/points`) are the
-  equivalents to remap.
+- Pi 5 brain's `navigate_to_pose` tool currently reports "no server" after a 10 s wait
+  (nav2 was phase-2). With this sim's nav stack running and `ROS_DISCOVERY_SERVER` set on
+  the laptop, that action server is now real — end-to-end test pending.
+- Isaac ROS pipelines (nvblox, visual SLAM, YOLOv8) on the Jetson consume RealSense-style
+  topics; the sim publishes D555-style names natively (`/cam_1/depth/image_rect_raw` +
+  `/cam_1/depth/camera_info`) so no remapping should be needed — end-to-end test pending.
+- The house world runs ≈ 0.1× real time on this laptop's iGPU; time-sensitive tuning
+  (controller gains, VAD-style timings) should not be calibrated against sim wall-clock.

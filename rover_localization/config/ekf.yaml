@@ -68,9 +68,12 @@ ekf_filter_node:
 
 
         imu0: imu/data
+        # Fuse only yaw rate from the IMU. Fusing linear acceleration (ax/ay)
+        # made the EKF diverge (x drifted to ~1e16 m, 2026-07-07) with the sim
+        # IMU's zero covariance; wheel odom already provides vx/vy/vyaw.
         imu0_config: [false, false, false,
                       false, false, false,
                       false, false, false,
                       false, false, true,
-                      true, true, false]
+                      false, false, false]
 
