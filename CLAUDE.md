@@ -28,10 +28,11 @@ hand-edited `fastdds_unicast.xml` peer lists are **retired**. A Fast DDS Discove
 ("meeting point") runs on the Pi5 as `langrobo-discovery.service`, port 11811, always-on.
 Machines are addressed by mDNS name, never by hardcoded wifi IP.
 
-To connect this sim to the fleet, export **before launching**:
+To connect this sim to the fleet, source **before launching** (pins IPv4 — mDNS prefers
+IPv6 and the discovery server is UDPv4-only, which fails silently):
 
 ```bash
-export ROS_DISCOVERY_SERVER=rakhi24-desktop.local:11811
+source src/rover_sim/rover_bringup/scripts/fleet_env.sh
 ```
 
 For standalone sim work (Pi5 off / not needed), just don't set it — everything is local.

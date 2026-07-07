@@ -13,8 +13,9 @@
   direction: GZ_TO_ROS
   lazy: true
 
-# Depth image (32FC1 meters) — names mirror RealSense D555 so the Jetson's
-# nvblox/Isaac ROS pipelines can consume the sim without remapping
+# Depth image (32FC1, meters) — consumed by nvblox on the Jetson.
+# Topic names mirror the RealSense D555 driver so perception configs
+# work unchanged against sim and real camera.
 - ros_topic_name: "cam_1/depth/image_rect_raw"
   gz_topic_name: "cam_1/depth_image"
   ros_type_name: "sensor_msgs/msg/Image"

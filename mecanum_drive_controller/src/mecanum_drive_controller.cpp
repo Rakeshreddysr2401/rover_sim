@@ -678,6 +678,12 @@ controller_interface::CallbackReturn MecanumDriveController::configure_wheel(
   if (command_handle == command_interfaces_.end())
   {
     RCLCPP_ERROR(logger, "Unable to obtain command handle for %s", wheel_name.c_str());
+    for (const auto & interface : command_interfaces_)
+    {
+      RCLCPP_ERROR(
+        logger, "  available command interface: prefix='%s' name='%s'",
+        interface.get_prefix_name().c_str(), interface.get_interface_name().c_str());
+    }
     return controller_interface::CallbackReturn::ERROR;
   }
 
