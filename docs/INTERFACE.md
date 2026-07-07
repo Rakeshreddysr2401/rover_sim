@@ -10,9 +10,11 @@ is listed here; anything else is internal to the sim and will not exist on the r
 |---|---|---|---|
 | `/scan` | `sensor_msgs/LaserScan` | 10 Hz | 2D lidar, frame `laser_frame` |
 | `/imu/data` | `sensor_msgs/Imu` | 15 Hz | frame `imu_frame` |
-| `/cam_1/color/image_raw` | `sensor_msgs/Image` | 2 Hz | RGB image |
+| `/cam_1/color/image_raw` | `sensor_msgs/Image` | 15 Hz | RGB image |
 | `/cam_1/color/camera_info` | `sensor_msgs/CameraInfo` | with image | intrinsics |
-| `/cam_1/depth/color/points` | `sensor_msgs/PointCloud2` | 2 Hz | RGBD point cloud, camera frame |
+| `/cam_1/depth/image_rect_raw` | `sensor_msgs/Image` | 15 Hz | depth, 32FC1 meters, frame `cam_1_depth_optical_frame`, 8 m range — nvblox input; names mirror RealSense D555 |
+| `/cam_1/depth/camera_info` | `sensor_msgs/CameraInfo` | with image | depth intrinsics (same sensor as color) |
+| `/cam_1/depth/color/points` | `sensor_msgs/PointCloud2` | 15 Hz | RGBD point cloud, camera frame |
 | `/mecanum_drive_controller/odom` | `nav_msgs/Odometry` | 50 Hz | wheel odometry |
 | `/odometry/filtered` | `nav_msgs/Odometry` | 30 Hz | EKF-fused odom (only when nav stack is up) |
 | `/joint_states`, `/tf`, `/tf_static` | — | — | standard state broadcasting |

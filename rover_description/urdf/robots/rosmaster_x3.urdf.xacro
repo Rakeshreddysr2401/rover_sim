@@ -39,11 +39,15 @@
       x_reflect="-1"
       y_reflect="-1"/>
 
+    <!-- 15 Hz / 8 m range: needed by depth-based mapping (nvblox) on the Jetson.
+         Defaults (2 Hz, 1.5 m) predate the perception integration. -->
     <xacro:rgbd_camera
       prefix="$(arg prefix)"
       camera_name="cam_1"
       xyz_offset="0.105 0 0.05"
-      rpy_offset="0 -0.50 0"/>
+      rpy_offset="0 -0.50 0"
+      update_rate="15"
+      clip_far="8.0"/>
 
     <xacro:lidar_sensor
       prefix="$(arg prefix)"

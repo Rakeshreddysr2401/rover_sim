@@ -19,10 +19,16 @@ cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.
 
 ## Machine IPs (keep in sync with speech_vision repo's CLAUDE.md if either changes)
 
-- Pi 5 (brain / langrobo_core, ros2_ws): 192.168.2.10, `ssh rakhi24@192.168.2.10`,
-  wifi 192.168.1.16
-- Jetson Orin (speech_vision): 192.168.2.20, `ssh rakhi24@192.168.2.20`, wifi 192.168.1.15
+- Pi 5 (brain / langrobo_core, ros2_ws): wifi 192.168.1.16, `ssh rakhi24@192.168.1.16`
+- Jetson Orin (speech_vision): wifi 192.168.1.15, `ssh rakhi24@192.168.1.15`
 - This laptop (sim): wifi 192.168.1.12 (dhcp — verify with `ip -4 addr show wlo1`)
+- The 192.168.2.x Pi↔Jetson ethernet link is PHYSICALLY DEAD (2026-07-05, see
+  Jetson `~/robot/config/fastdds_unicast.xml`) — everything runs over wifi.
+- Router drops wifi↔wifi DDS multicast: cross-machine discovery needs unicast
+  peers. Laptop side: `FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/ros2_ws/fastdds_peers.xml`
+  before launching the sim; Jetson container side:
+  `/workspaces/isaac_ros-dev/config/fastdds_unicast.xml` (master:
+  `~/robot/config/fastdds_unicast.xml`).
 - `ROS_DOMAIN_ID=0` on all machines.
 
 ## Conventions
