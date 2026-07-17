@@ -10,8 +10,6 @@
     <xacro:include filename="$(find rover_description)/urdf/mech/rosmaster_x3_base.urdf.xacro"/>
     <xacro:include filename="$(find rover_description)/urdf/mech/mecanum_wheel.urdf.xacro"/>
     <xacro:include filename="$(find rover_description)/urdf/sensors/rgbd_camera.urdf.xacro"/>
-    <xacro:include filename="$(find rover_description)/urdf/sensors/lidar.urdf.xacro"/>
-    <xacro:include filename="$(find rover_description)/urdf/sensors/imu.urdf.xacro"/>
 
     <xacro:rosmaster_x3_base prefix="$(arg prefix)"/>
 
@@ -39,8 +37,9 @@
       x_reflect="-1"
       y_reflect="-1"/>
 
-    <!-- 15 Hz / 8 m range: needed by depth-based mapping (nvblox) on the Jetson.
-         Defaults (2 Hz, 1.5 m) predate the perception integration. -->
+    <!-- The only exteroceptive sensor, mirroring the real rover: a RealSense
+         D555-style RGBD camera with its built-in IMU (topics /cam_1/*, /cam_1/imu).
+         15 Hz / 8 m range: needed by depth-based mapping (nvblox) on the Jetson. -->
     <xacro:rgbd_camera
       prefix="$(arg prefix)"
       camera_name="cam_1"
@@ -48,25 +47,6 @@
       rpy_offset="0 -0.50 0"
       update_rate="15"
       clip_far="8.0"/>
-
-    <xacro:lidar_sensor
-      prefix="$(arg prefix)"
-      parent="base_link"
-      frame_id="laser_frame"
-      xyz_offset="0 0 0.0825"
-      rpy_offset="0 0 0"
-      mesh_xyz_offset="0 0 0"
-      mesh_rpy_offset="${-M_PI/2} 0 0"
-      topic_name="scan"/>
-
-    <xacro:imu_sensor
-      prefix="$(arg prefix)"
-      parent="base_link"
-      frame_id="imu"
-      xyz_offset="0 0 0.006"
-      rpy_offset="0 0 0"
-      update_rate="15.0"
-      topic_name="imu/data"/>
 
     <xacro:include filename="$(find rover_description)/urdf/control/velocity_control_plugin.urdf.xacro" />
     <xacro:load_velocity_control_plugin use_gazebo="$(arg use_gazebo)"/>

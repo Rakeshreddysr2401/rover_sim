@@ -31,17 +31,10 @@
   direction: GZ_TO_ROS
   lazy: true
 
-  # LIDAR configuration
-- ros_topic_name: "scan"
-  gz_topic_name: "scan"
-  ros_type_name: "sensor_msgs/msg/LaserScan"
-  gz_type_name: "gz.msgs.LaserScan"
-  direction: GZ_TO_ROS
-  lazy: false
-
-# IMU configuration
-- ros_topic_name: "imu/data"
-  gz_topic_name: "imu/data"
+# Camera built-in IMU (like the real D555) — consumed by cuVSLAM/RTABMap on
+# the Jetson. Topic name mirrors realsense-ros with unite_imu_method set.
+- ros_topic_name: "cam_1/imu"
+  gz_topic_name: "cam_1/imu"
   ros_type_name: "sensor_msgs/msg/Imu"
   gz_type_name: "gz.msgs.IMU"
   direction: GZ_TO_ROS

@@ -3,37 +3,45 @@
 Gazebo simulation of a mecanum-wheel rover (Yahboom ROSMASTER X3 class) for ROS 2 Jazzy.
 
 This repository is the **simulation stand-in for the real rover** in a multi-machine robot
-system. It provides the robot, its sensors, and changeable indoor environments so the
-higher-level stacks (LangGraph brain on the Pi 5, Isaac ROS perception on the Jetson) can be
-developed and tested before the real robot exists. Everything the sim exposes — topics, types,
-frames — is the contract the real robot must satisfy later. See
+system, and deliberately nothing more: it provides the **4-wheel mecanum robot**, its **one
+sensor — a RealSense D555-style RGBD camera with built-in IMU** — and changeable indoor
+environments. All intelligence runs off-robot: visual SLAM (cuVSLAM/RTABMap), nvblox 3D
+mapping, and Nav2 on the Jetson; LangGraph reasoning on the Pi 5. Everything the sim
+exposes — topics, types, frames — is the contract the real robot must satisfy later. See
 [docs/INTERFACE.md](docs/INTERFACE.md).
 
 ## System context
 
 ```
-┌────────────┐   /voice/*    ┌─────────────┐   /cmd_vel, nav2 actions   ┌──────────────────┐
-│ Jetson Orin│ ────────────► │  Pi 5 brain │ ─────────────────────────► │  THIS LAPTOP     │
-│ speech +   │               │  LangGraph  │ ◄───────────────────────── │  Gazebo sim of   │
-│ Isaac ROS  │ ◄──────────── │  planning   │   /scan /odom /camera/*    │  the rover       │
-└────────────┘   images      └─────────────┘                            └──────────────────┘
-      ▲                                                                        │
-      └────────────────── later: replaced by the real rover ◄─────────────────┘
+┌─────────────────────┐   nav2 goals   ┌─────────────┐
+│  Jetson Orin        │ ◄───────────── │  Pi 5 brain │
+│  cuVSLAM/RTABMap,   │                │  LangGraph  │
+│  nvblox, Nav2,      │                │  reasoning  │
+│  YOLO, speech       │                └─────────────┘
+└──────┬──────▲───────┘
+       │      │  /cam_1/color/*  /cam_1/depth/*  /cam_1/imu  /odom  /tf
+  cmd_vel     │
+       ▼      │
+┌─────────────┴────────┐
+│  THIS LAPTOP         │   ◄── later: replaced by the real rover
+│  Gazebo sim: rover + │       (same topics, same frames)
+│  D555 cam + world    │
+└──────────────────────┘
 ```
 
 ## Packages
 
 | Package | Purpose |
 |---|---|
-| `rover_description` | URDF/XACRO of the rover (mecanum base, RGBD camera, lidar, IMU) |
+| `rover_description` | URDF/XACRO of the rover (mecanum base + D555-style RGBD camera with built-in IMU) |
 | `rover_gazebo` | Worlds (house, cafe, empty), local model library, ros_gz bridge config |
-| `rover_bringup` | Top-level launch files and convenience scripts |
-| `rover_navigation` | Nav2 config (omni motion model), SLAM (slam_toolbox), pre-made maps |
-| `rover_localization` | EKF sensor fusion (robot_localization: wheel odom + IMU) |
-| `rover_docking` | Nav2 docking server + AprilTag dock pose detection (optional) |
-| `rover_msgs` | Custom actions/services |
+| `rover_bringup` | Launch files and convenience scripts (`fleet_sim.sh`, `rosmaster_x3_gazebo.sh`) |
+| `mecanum_drive_controller` | ros2_control controller for the 4 mecanum wheels (+ wheel odometry) |
+| `rover_msgs` | Custom actions/services used by the test nodes |
 | `rover_system_tests` | Motion test nodes (square drive, etc.) |
-| `mecanum_drive_controller` | ros2_control controller for the 4 mecanum wheels |
+
+No Nav2/SLAM/EKF packages here — mapping and navigation are the Jetson's job
+(see [docs/INTERFACE.md](docs/INTERFACE.md) for the split).
 
 ## Quick start
 
@@ -41,21 +49,19 @@ frames — is the contract the real robot must satisfy later. See
 cd /workspace/ros2_ws
 colcon build --symlink-install && source install/setup.bash
 
-# Sim only (Gazebo GUI + RViz), house world by default:
+# Gazebo GUI + RViz, house world by default:
 ./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh
 
-# Sim + Nav2 with the pre-made house map:
-./src/rover_sim/rover_bringup/scripts/rosmaster_x3_navigation.sh
+# Other worlds:
+WORLD=cafe ./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh
 
-# Sim + Nav2 building the map live with SLAM:
-./src/rover_sim/rover_bringup/scripts/rosmaster_x3_navigation.sh slam
-
-# Other worlds:  WORLD=cafe ./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh
+# As a fleet member (headless-capable, joins the Pi5 discovery server when up):
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh start
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh status   # "2/2 active controllers" = drive ready
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh stop
 ```
 
 Teleop test: `ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/mecanum_drive_controller/cmd_vel -p stamped:=true`
-
-Send a nav goal from code: see `rover_navigation/scripts/nav_to_pose.py`.
 
 ## Environments
 
@@ -67,16 +73,15 @@ Send a nav goal from code: see `rover_navigation/scripts/nav_to_pose.py`.
 
 **Performance note (no discrete GPU):** the fully furnished `house.world` runs at roughly 0.1
 real-time factor on integrated graphics. Everything still works — sensor rates are correct in
-sim time and Nav2 uses sim time — it is just slower than wall clock. Use `empty.world` or
-`cafe.world` when you don't need the furniture.
+sim time — it is just slower than wall clock. Use `empty.world` or `cafe.world` when you
+don't need the furniture.
 
 ## Changing the robot or the environment
 
 - New environment: drop a world file in `rover_gazebo/worlds/`, reuse models from
-  `rover_gazebo/models/`, then `WORLD=<name>` (expects `<name>.world`, and
-  `<name>_world_map.yaml` in `rover_navigation/maps` for map-based navigation).
+  `rover_gazebo/models/`, then `WORLD=<name>` (expects `<name>.world`).
 - Robot variant: `rover_description/urdf/robots/rosmaster_x3.urdf.xacro` composes the base,
-  wheels, and sensors from `urdf/mech/` and `urdf/sensors/`. Add a new robot file there and
+  wheels, and camera from `urdf/mech/` and `urdf/sensors/`. Add a new robot file there and
   pass `robot_name:=<variant>` (controller config lives in
   `rover_description/config/<variant>/`).
 

@@ -12,3 +12,4 @@ rover_description/config/*/ros2_controllers.yaml
 *.pyc
 __pycache__/
 .DS_Store
+.claude/*.tmp.*

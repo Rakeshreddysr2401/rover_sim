@@ -4,7 +4,14 @@
 cleanup() {
     echo "Cleaning up..."
     sleep 5.0
-    pkill -9 -f "ros2|gazebo|gz|nav2|amcl|bt_navigator|nav_to_pose|rviz2|assisted_teleop|cmd_vel_relay|robot_state_publisher|joint_state_publisher|move_to_free|mqtt|autodock|cliff_detection|moveit|move_group|basic_navigator"
+    # Only this repo's processes — do NOT blanket-kill "gz|ros2" (there may be
+    # other Gazebo/ROS work running on this laptop, e.g. ~/langrobo).
+    pkill -9 -f "rover.gazebo.launch" 2>/dev/null
+    pkill -9 -f "gz sim.*rover_gazebo/share" 2>/dev/null
+    pkill -9 -f "parameter_bridge --ros-args --params-file" 2>/dev/null
+    pkill -9 -f "image_bridge.*cam_1" 2>/dev/null
+    pkill -9 -f "robot_state_publisher --ros-args" 2>/dev/null
+    pkill -9 -f "rviz2.*rover" 2>/dev/null
 }
 
 # Set up cleanup trap
@@ -14,6 +21,11 @@ trap 'cleanup' SIGINT SIGTERM
 # World selection: WORLD=house (default) or WORLD=cafe, e.g. WORLD=cafe ./rosmaster_x3_gazebo.sh
 WORLD="${WORLD:-house}"
 if [ "$WORLD" = "cafe" ]; then SPAWN_Z=0.20; else SPAWN_Z=0.05; fi
+
+# Isolate this sim's gz-transport from any other Gazebo instance on the machine
+# (a second gz server otherwise steals the robot spawn). Debug shells must match:
+#   GZ_PARTITION=rover_sim gz topic -l
+export GZ_PARTITION=rover_sim
 
 echo "Launching Gazebo simulation..."
 ros2 launch rover_gazebo rover.gazebo.launch.py \

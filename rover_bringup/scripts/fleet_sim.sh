@@ -6,10 +6,12 @@
 #   ./fleet_sim.sh stop
 #   ./fleet_sim.sh status
 #
-# Env overrides: WORLD=house|cafe (default house), MODE=slam|map (default slam).
-# MODE=slam needs no initial pose and coordinates are reproducible because the
-# robot always spawns at the same pose. MODE=map uses AMCL with the pre-made
-# <WORLD>_world_map (initial pose auto-set to the spawn pose in nav params).
+# Env overrides: WORLD=house|cafe|empty (default house).
+#
+# The sim is a stand-in for the REAL ROVER ONLY: 4-wheel mecanum base + a
+# D555-style depth camera with built-in IMU + the world. No Nav2/SLAM/EKF here —
+# mapping and navigation (cuVSLAM/RTABMap, nvblox, Nav2) run on the Jetson,
+# reasoning on the Pi5. See docs/INTERFACE.md.
 #
 # Joins the Pi5 discovery server via fleet_env.sh; if the Pi5 is unreachable
 # the sim still starts, standalone (plain local discovery).
@@ -17,7 +19,10 @@
 set -eo pipefail
 CMD="${1:-status}"
 WORLD="${WORLD:-house}"
-MODE="${MODE:-slam}"
+
+if [ -n "${MODE:-}" ]; then
+    echo "fleet_sim: NOTE: MODE=$MODE ignored — SLAM/Nav2 moved to the Jetson (this sim is rover+camera+world only)"
+fi
 
 WS=/workspace/ros2_ws
 LOG_DIR="$WS/logs"
@@ -25,27 +30,27 @@ LOG="$LOG_DIR/fleet_sim.log"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 stop_sim() {
+    # Kill ONLY this repo's sim. Patterns are anchored to rover_gazebo paths /
+    # this launch's names — a plain "[g]z sim" pattern once killed an unrelated
+    # Gazebo instance (~/langrobo) that happened to be running on this laptop.
     # Bracket trick so pkill doesn't match this script's own command line.
-    pkill -9 -f "[r]osmaster_x3_navigation.launch" 2>/dev/null || true
     pkill -9 -f "[r]over.gazebo.launch" 2>/dev/null || true
-    pkill -9 -f "[g]z sim" 2>/dev/null || true
-    for p in "[p]arameter_bridge" "[i]mage_bridge" "[r]obot_state_publisher" \
-             "[e]kf_node" "[c]omponent_container" "[l]ifecycle_manager" \
-             "[s]lam_toolbox" "[a]ssisted_teleop" "[c]md_vel_relay" \
-             "[n]av_to_pose" "[r]viz2"; do
-        pkill -9 -f "$p" 2>/dev/null || true
-    done
+    pkill -9 -f "gz sim.*[r]over_gazebo/share" 2>/dev/null || true
+    pkill -9 -f "[p]arameter_bridge --ros-args --params-file" 2>/dev/null || true
+    pkill -9 -f "[i]mage_bridge.*cam_1" 2>/dev/null || true
+    pkill -9 -f "[r]obot_state_publisher --ros-args" 2>/dev/null || true
+    pkill -9 -f "[r]viz2.*rover" 2>/dev/null || true
     sleep 1
 }
 
 sim_running() {
-    pgrep -f "[r]osmaster_x3_navigation.launch" >/dev/null
+    pgrep -f "[r]over.gazebo.launch" >/dev/null
 }
 
 case "$CMD" in
 start)
     if sim_running; then
-        echo "fleet_sim: already running (WORLD/MODE of the running instance unchanged)"
+        echo "fleet_sim: already running (WORLD of the running instance unchanged)"
         exit 0
     fi
     stop_sim
@@ -73,17 +78,24 @@ start)
         if xset q >/dev/null 2>&1; then HEADLESS=False; fi
     fi
 
-    if [ "$MODE" = "slam" ]; then SLAM_ARG=True; else SLAM_ARG=False; fi
     if [ "$WORLD" = "cafe" ]; then SPAWN_Z=0.20; else SPAWN_Z=0.05; fi
-    MAP=$(ros2 pkg prefix rover_navigation)/share/rover_navigation/maps/${WORLD}_world_map.yaml
 
-    echo "fleet_sim: starting WORLD=$WORLD MODE=$MODE headless=$HEADLESS (log: $LOG)"
-    nohup ros2 launch rover_bringup rosmaster_x3_navigation.launch.py \
-        enable_odom_tf:=false headless:=$HEADLESS use_rviz:=$([ "$HEADLESS" = "False" ] && echo true || echo false) \
-        use_sim_time:=true world_file:=${WORLD}.world x:=0.0 y:=0.0 z:=$SPAWN_Z \
-        slam:=$SLAM_ARG map:=$MAP > "$LOG" 2>&1 &
+    # Isolate this sim's gz-transport from any other Gazebo instance on the
+    # machine (without this, a second gz server steals the robot spawn: the
+    # world-list/create requests cross-talk). Debug shells must match:
+    #   GZ_PARTITION=rover_sim gz topic -l
+    export GZ_PARTITION=rover_sim
+
+    echo "fleet_sim: starting WORLD=$WORLD headless=$HEADLESS (log: $LOG)"
+    # enable_odom_tf: the robot owns odom->base_footprint (wheel odometry);
+    # the Jetson's SLAM provides map->odom on top (REP-105 split).
+    nohup ros2 launch rover_gazebo rover.gazebo.launch.py \
+        enable_odom_tf:=true headless:=$HEADLESS \
+        use_rviz:=$([ "$HEADLESS" = "False" ] && echo true || echo false) \
+        jsp_gui:=false load_controllers:=true use_sim_time:=true \
+        world_file:=${WORLD}.world x:=0.0 y:=0.0 z:=$SPAWN_Z > "$LOG" 2>&1 &
     disown
-    echo "fleet_sim: launched (nav2 takes ~1 min in $WORLD.world; check with: $0 status)"
+    echo "fleet_sim: launched (drive ready when status reports 2/2 controllers; check with: $0 status)"
     ;;
 stop)
     stop_sim
@@ -110,7 +122,7 @@ status)
     echo "fleet_sim: running — active controllers: ${CTRL:-0}/2 (2 = drive ready)"
     ;;
 *)
-    echo "usage: $0 {start|stop|status}   (env: WORLD=house|cafe MODE=slam|map)"
+    echo "usage: $0 {start|stop|status}   (env: WORLD=house|cafe|empty)"
     exit 2
     ;;
 esac

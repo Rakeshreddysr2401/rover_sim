@@ -44,6 +44,7 @@
     clip_near:=0.05
     clip_far:=8.0
     update_rate:=15
+    imu_update_rate:=200
     always_on:=1
     visualize:=true
     enable_collision:=false">
@@ -136,6 +137,23 @@
     </joint>
     <link name="${prefix}${camera_name}_color_optical_frame"/>
 
+    <!-- Built-in IMU, like the real RealSense D555. Frame layout mirrors
+         realsense-ros with unite_imu_method: data on <camera>/imu in
+         <camera>_imu_optical_frame. -->
+    <joint name="${prefix}${camera_name}_imu_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <parent link="${prefix}${camera_name}_link" />
+      <child link="${prefix}${camera_name}_imu_frame" />
+    </joint>
+    <link name="${prefix}${camera_name}_imu_frame"/>
+
+    <joint name="${prefix}${camera_name}_imu_optical_joint" type="fixed">
+      <origin xyz="${optical_xyz_offset}" rpy="${optical_rpy_offset}" />
+      <parent link="${prefix}${camera_name}_imu_frame" />
+      <child link="${prefix}${camera_name}_imu_optical_frame" />
+    </joint>
+    <link name="${prefix}${camera_name}_imu_optical_frame"/>
+
     <gazebo reference="${prefix}${camera_name}_link">
       <sensor name="${prefix}${camera_name}" type="rgbd_camera">
         <camera>
@@ -154,6 +172,19 @@
         <topic>${camera_name}</topic>
         <update_rate>${update_rate}</update_rate>
         <visualize>${visualize}</visualize>
+      </sensor>
+      <!-- The camera's built-in IMU. Sensor pose rotates data into the
+           optical-frame axes (x right, y down, z forward), matching what
+           realsense-ros reports in <camera>_imu_optical_frame. Attached to
+           the camera link (not the massless imu frame links) so SDF joint
+           lumping keeps the sensor valid. -->
+      <sensor name="${prefix}${camera_name}_imu" type="imu">
+        <pose>0 0 0 ${-M_PI/2} 0 ${-M_PI/2}</pose>
+        <topic>${camera_name}/imu</topic>
+        <update_rate>${imu_update_rate}</update_rate>
+        <always_on>${always_on}</always_on>
+        <visualize>false</visualize>
+        <gz_frame_id>${prefix}${camera_name}_imu_optical_frame</gz_frame_id>
       </sensor>
     </gazebo>
 

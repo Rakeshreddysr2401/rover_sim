@@ -5,12 +5,16 @@ Gazebo (gz-sim 8), Ubuntu 24.04. GitHub: https://github.com/Rakeshreddysr2401/ro
 Workspace: `/workspace/ros2_ws` (HDD partition; keep large artifacts — bags, maps, models —
 under `/workspace`, not the SSD home dir).
 
+**Scope (narrowed 2026-07-17): the sim is the ROBOT ONLY** — 4-wheel mecanum base + one
+D555-style RGBD camera with built-in IMU + the worlds. Nav2/SLAM/EKF/docking were removed
+from this repo; visual SLAM (cuVSLAM/RTABMap), nvblox, and Nav2 run on the Jetson,
+reasoning on the Pi5. The sim↔fleet split lives in `docs/INTERFACE.md`.
+
 ## Build & run
 
 ```bash
 cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash
-./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh        # sim only (WORLD=cafe|house)
-./src/rover_sim/rover_bringup/scripts/rosmaster_x3_navigation.sh    # sim + nav2 (add "slam" arg for SLAM)
+./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh        # GUI sim (WORLD=cafe|house)
 ```
 
 ## Fleet start (one command)
@@ -25,20 +29,26 @@ directly on this laptop:
 ./src/rover_sim/rover_bringup/scripts/fleet_sim.sh start    # GUI if logged in, headless over ssh
 ./src/rover_sim/rover_bringup/scripts/fleet_sim.sh status   # "2/2 active controllers" = drive ready
 ./src/rover_sim/rover_bringup/scripts/fleet_sim.sh stop
-# env: WORLD=house|cafe  MODE=slam|map  (map mode auto-localizes at the spawn pose)
+# env: WORLD=house|cafe|empty   (MODE is gone — mapping/nav moved to the Jetson)
 ```
 
 `fleet_sim.sh start` joins the Pi5 discovery server automatically when the Pi5 resolves,
 else starts standalone. Requires sshd here (installed + enabled 2026-07-07) with the Pi5's
 key in `~/.ssh/authorized_keys` (done). Logs: `/workspace/ros2_ws/logs/fleet_sim.log`.
 
-- cmd_vel is **TwistStamped** on `/mecanum_drive_controller/cmd_vel`; plain `/cmd_vel` only
-  exists when Nav2 is up (relay restamps it).
+- cmd_vel is **TwistStamped** on `/mecanum_drive_controller/cmd_vel` — the robot's ONLY
+  command input. Plain `/cmd_vel` does not exist here; restamping is the Jetson Nav2 side's
+  job (Jazzy `enable_stamped_cmd_vel` or a relay there).
 - `house.world` ≈ 0.1 RTF on this iGPU laptop; `empty.world` ≈ 1.0 RTF.
 - Camera mirrors RealSense D555 naming (`/cam_1/color/*`, `/cam_1/depth/image_rect_raw`,
   `/cam_1/depth/camera_info`, `/cam_1/depth/color/points`) at 15 Hz, 8 m depth range — so
-  the Jetson's nvblox/Isaac ROS pipelines consume the sim without remapping.
-- Full topic/action/frame contract: `docs/INTERFACE.md`. Real-robot swap: `docs/REAL_ROBOT_SWAP.md`.
+  the Jetson's nvblox/Isaac ROS pipelines consume the sim without remapping. The camera's
+  built-in IMU (like the real D555) is `/cam_1/imu`, 200 Hz, frame `cam_1_imu_optical_frame`.
+  No lidar, no body IMU — deleted 2026-07-17 to match the real rover.
+- The robot owns `odom→base_footprint` (wheel odom, `enable_odom_tf:=true` fleet default);
+  the Jetson's SLAM owns `map→odom`.
+- Full topic/frame contract + Jetson pipeline notes: `docs/INTERFACE.md`. Real-robot swap:
+  `docs/REAL_ROBOT_SWAP.md`.
 
 ## Fleet networking (Fast DDS Discovery Server — see Pi5 `~/ros2_ws/NETWORKING.md`)
 
