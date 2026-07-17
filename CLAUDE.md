@@ -1,97 +1,89 @@
 # rover_sim — working notes
 
-Simulation stand-in for the real mecanum rover ("Rakhi" home robot fleet). ROS 2 Jazzy +
-Gazebo (gz-sim 8), Ubuntu 24.04. GitHub: https://github.com/Rakeshreddysr2401/rover_sim.
-Workspace: `/workspace/ros2_ws` (HDD partition; keep large artifacts — bags, maps, models —
-under `/workspace`, not the SSD home dir).
+Sim that **impersonates the real mecanum rover** ("Rakhi" home robot fleet). ROS 2 Jazzy +
+Gazebo (gz-sim 8 / Harmonic), Ubuntu 24.04. GitHub:
+https://github.com/Rakeshreddysr2401/rover_sim. Workspace: `/workspace/ros2_ws` (HDD
+partition; keep large artifacts — bags, maps, models — under `/workspace`, not the SSD home dir).
 
-**Scope (narrowed 2026-07-17): the sim is the ROBOT ONLY** — 4-wheel mecanum base + one
-D555-style RGBD camera with built-in IMU + the worlds. Nav2/SLAM/EKF/docking were removed
-from this repo; visual SLAM (cuVSLAM/RTABMap), nvblox, and Nav2 run on the Jetson,
-reasoning on the Pi5. The sim↔fleet split lives in `docs/INTERFACE.md`.
+**Scope (major pivot 2026-07-17): hardware impersonation, not a generic robot sim.** The sim
+publishes the *exact* real-robot contract — RealSense D555 on `/camera/camera0/*` with
+wall-clock stamps + captured real intrinsics, 4-wheel skid-steer driven over `/cmd_vel`
+through a byte-accurate ESP32 firmware port. The Jetson (RTAB-Map/cuVSLAM, nvblox, Nav2) and
+Pi5 (LangGraph reasoning) run UNCHANGED and can't tell sim from real (`config/hardware=sim`
+on the Jetson). Contract: `docs/INTERFACE.md`. This replaced an earlier `/cam_1/*` +
+TwistStamped mecanum design (see git history / [[three-machine-nav-pipeline]]); the parity
+implementation was merged in from `~/langrobo/rover_sim` — see [[langrobo-parity-sim-merge]].
 
 ## Build & run
 
 ```bash
 cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash
-./src/rover_sim/rover_bringup/scripts/rosmaster_x3_gazebo.sh        # GUI sim (WORLD=cafe|house)
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh start   # headless 4-stage pipeline
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh status  # {"mode":"sim",...} = up
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh gui     # attach a Gazebo GUI
+./src/rover_sim/rover_bringup/scripts/fleet_sim.sh stop
 ```
+
+The 4 stages: `gz sim` (headless, RTF 1.0) → `ros_gz parameter_bridge` (internal
+`/rover_sim/*`) → `rover_contract/restamper` (C++: contract names, wall stamps, depth
+32FC1→16UC1) → `rover_contract/contract_bridge.py` (imu axes, `/cmd_vel` firmware emulation,
+captured `/tf_static`, status marker). The parity pipeline uses `langrobo_home` only
+(wall-clock parity needs RTF≈1.0); the old furnished house/cafe worlds + AWS model library
+are kept in `rover_gazebo/{worlds,models}` as assets but are unused by `fleet_sim.sh`.
 
 ## Fleet start (one command)
 
-The whole robot starts from the Pi5: `~/ros2_ws/scripts/fleet.sh {sim|rover|stop|down|status}`
-(`stop` parks the body but keeps the brain/Telegram up; `down` is a full shutdown incl. the
-Pi5 services).
-In `sim` mode the Pi5 sshes here and runs this repo's fleet member script, which also works
-directly on this laptop:
+The whole robot starts from the Pi5: `~/ros2_ws/scripts/fleet.sh {sim|rover|stop|down|status}`.
+In `sim` mode the Pi5 sshes here and runs `fleet_sim.sh`. Requires sshd here with the Pi5's
+key in `~/.ssh/authorized_keys` (done 2026-07-07). Logs: `/workspace/ros2_ws/logs/`.
 
-```bash
-./src/rover_sim/rover_bringup/scripts/fleet_sim.sh start    # GUI if logged in, headless over ssh
-./src/rover_sim/rover_bringup/scripts/fleet_sim.sh status   # "2/2 active controllers" = drive ready
-./src/rover_sim/rover_bringup/scripts/fleet_sim.sh stop
-# env: WORLD=house|cafe|empty   (MODE is gone — mapping/nav moved to the Jetson)
-```
+- **`/cmd_vel` is plain Twist**, run through `contract_bridge.py`'s firmware port: PWM
+  deadband floor (`vx=0.03` → drives ≈0.168 m/s), 0.02 dead-stick, 0.30 m/s full scale,
+  0.5 s watchdog, track 0.24. Keep the constants byte-identical to `rover_firmware.ino` on
+  the Pi5. Nav2 must stream commands continuously and expect no smooth low-speed regime.
+- **Camera**: `/camera/camera0/{color,infra1,depth,motion}`, 896×504, 15 Hz; depth is
+  **16UC1 mm** (0=invalid), IMU `/camera/camera0/motion/sample` 200 Hz in
+  `camera0_motion_optical_frame` (no orientation, cov[0]=-1). **Wall-clock stamps** →
+  consumers use `use_sim_time:=false`; there is NO `/clock`.
+- **The sim publishes no odometry** — the Jetson's visual SLAM is the sole pose source
+  (`map→odom`, `odom→base_link`), matching the real robot (no wheel encoders). The robot only
+  owns the captured `camera0_*` `/tf_static` tree.
+- Known divergences (accepted): centered principal point vs real off-center; noise-free IMU;
+  4-wheel skid-steer turns slightly easier than real. Details in `docs/INTERFACE.md`.
+- `d555_contract/` = captured REAL camera_infos + frame tree; never hand-edit, recapture from
+  hardware. `docs/REAL_ROBOT_SWAP.md` covers the sim↔real flip.
 
-`fleet_sim.sh start` joins the Pi5 discovery server automatically when the Pi5 resolves,
-else starts standalone. Requires sshd here (installed + enabled 2026-07-07) with the Pi5's
-key in `~/.ssh/authorized_keys` (done). Logs: `/workspace/ros2_ws/logs/fleet_sim.log`.
+## Networking — OPEN QUESTION (reconcile before touching)
 
-- cmd_vel is **TwistStamped** on `/mecanum_drive_controller/cmd_vel` — the robot's ONLY
-  command input. Plain `/cmd_vel` does not exist here; restamping is the Jetson Nav2 side's
-  job (Jazzy `enable_stamped_cmd_vel` or a relay there).
-- `house.world` ≈ 0.1 RTF on this iGPU laptop; `empty.world` ≈ 1.0 RTF.
-- Camera mirrors RealSense D555 naming (`/cam_1/color/*`, `/cam_1/depth/image_rect_raw`,
-  `/cam_1/depth/camera_info`, `/cam_1/depth/color/points`) at 15 Hz, 8 m depth range — so
-  the Jetson's nvblox/Isaac ROS pipelines consume the sim without remapping. The camera's
-  built-in IMU (like the real D555) is `/cam_1/imu`, 200 Hz, frame `cam_1_imu_optical_frame`.
-  No lidar, no body IMU — deleted 2026-07-17 to match the real rover.
-- The robot owns `odom→base_footprint` (wheel odom, `enable_odom_tf:=true` fleet default);
-  the Jetson's SLAM owns `map→odom`.
-- Full topic/frame contract + Jetson pipeline notes: `docs/INTERFACE.md`. Real-robot swap:
-  `docs/REAL_ROBOT_SWAP.md`.
+`fleet_sim.sh` runs the parity pipeline on **plain domain-0 multicast** (it `unset`s
+`ROS_DISCOVERY_SERVER`/`FASTRTPS_DEFAULT_PROFILES_FILE`), verified working 2026-07-17. But
+the Pi5 `~/ros2_ws/NETWORKING.md` says the fleet uses a **Fast DDS Discovery Server** on the
+Pi5 (port 11811) because home routers drop multicast, and `fleet_env.sh` here still pins that.
+These two stories conflict. Before changing either: confirm on real WiFi whether multicast
+survives between laptop/Pi5/Jetson, or whether the parity pipeline needs the discovery server
+too. `fleet_env.sh` is retained but NOT sourced by the new `fleet_sim.sh`.
 
-## Fleet networking (Fast DDS Discovery Server — see Pi5 `~/ros2_ws/NETWORKING.md`)
-
-The fleet does NOT use default multicast discovery (home routers drop it) and the old
-hand-edited `fastdds_unicast.xml` peer lists are **retired**. A Fast DDS Discovery Server
-("meeting point") runs on the Pi5 as `langrobo-discovery.service`, port 11811, always-on.
-Machines are addressed by mDNS name, never by hardcoded wifi IP.
-
-To connect this sim to the fleet, source **before launching** (pins IPv4 — mDNS prefers
-IPv6 and the discovery server is UDPv4-only, which fails silently):
-
-```bash
-source src/rover_sim/rover_bringup/scripts/fleet_env.sh
-```
-
-For standalone sim work (Pi5 off / not needed), just don't set it — everything is local.
-
-- Gotcha (from NETWORKING.md, verified 2026-07-06): `ros2 node list` via the discovery
-  server is a red herring on this Jazzy build — it returns empty even while pub/sub works.
-  Verify links by echoing a continuously-published topic instead.
-- mDNS from this laptop resolves `rakhi24-desktop.local` and `rakhi-jetson.local` (verified
-  2026-07-07).
+- Gotcha (NETWORKING.md, 2026-07-06): `ros2 node list` via the discovery server returns empty
+  even while pub/sub works — verify links by echoing a live topic instead.
+- mDNS resolves `rakhi24-desktop.local` and `rakhi-jetson.local` from here (2026-07-07).
 
 ## The machines
 
 | Machine | Role | Repo (local path) | mDNS / ssh |
 |---|---|---|---|
-| This laptop | Gazebo sim (this repo) | `/workspace/ros2_ws/src/rover_sim` | hostname `rakhi24` |
-| Pi 5 | LangGraph brain, discovery server, micro-ROS agent | `~/ros2_ws` (pi5_ros2_ws: langrobo_core/langrobo_ros) | `ssh rakhi24@rakhi24-desktop.local` (wifi 192.168.1.16) |
-| Jetson Orin | STT/TTS/music/camera/YOLO in `ai_stack`; Isaac ROS in `isaac_ros` container | `~/robot` (speech_vision) | `ssh rakhi24@rakhi-jetson.local` (wifi 192.168.1.15) |
+| This laptop | this sim | `/workspace/ros2_ws/src/rover_sim` | hostname `rakhi24` |
+| Pi 5 | LangGraph brain, micro-ROS agent | `~/ros2_ws` (pi5_ros2_ws) | `ssh rakhi24@rakhi24-desktop.local` (192.168.1.16) |
+| Jetson Orin | RTAB-Map/cuVSLAM + nvblox + Nav2 (`isaac_ros`), STT/TTS/YOLO (`ai_stack`) | `~/robot` (speech_vision) | `ssh rakhi24@rakhi-jetson.local` (192.168.1.15) |
 | Mac Mini | LLM server (llama.cpp) | — | `singireddys-mac-mini.local:8080` |
 | ESP32 | real wheels via micro-ROS (UDP 8888 to Pi5) | — | — |
 
-The Pi5↔Jetson ethernet (192.168.2.x) link was reported physically dead 2026-07-05; the
-discovery-server scheme works over whatever network is up, so nothing here depends on it.
-
 ## Conventions
 
-- Packages are `rover_*`; the robot variant is `rosmaster_x3` (xacro in
-  `rover_description/urdf/robots/`, controller config in `rover_description/config/<variant>/`).
-- No hardcoded absolute paths in launch files — resolve via
-  `get_package_share_directory`/`FindPackageShare` (upstream had `~/ros2_ws` hardcoded; fixed).
-- Sim-only nodes (Gazebo, bridge, spawner) live only in `rover_gazebo`.
-- Adapted from automaticaddison/yahboom_rosmaster (BSD-3); per-package LICENSE files retained.
-- Keep the machine/interface details in this file in sync with the Pi5 repo's CLAUDE.md and
-  the Jetson repo's CLAUDE.md — change all three together or none.
+- `GZ_PARTITION=rover_sim` is exported by `fleet_sim.sh` — a second gz instance on the
+  machine otherwise steals the robot spawn. Debug with `GZ_PARTITION=rover_sim gz topic -l`.
+  See [[gz-partition-second-sim]].
+- `contract_bridge.py` ↔ `rover_firmware.ino` is the fleet's ONLY intentional code
+  duplication — the drive constants must stay in sync.
+- Keep machine/interface details here in sync with the Pi5 repo's CLAUDE.md and the Jetson
+  repo's CLAUDE.md — change all three together or none. **This pivot needs propagating there:
+  the Jetson/Pi5 must consume `/camera/camera0/*` + `/cmd_vel`, not `/cam_1/*`/TwistStamped.**

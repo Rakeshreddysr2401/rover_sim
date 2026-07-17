@@ -1,62 +1,51 @@
 # Swapping the simulation for the real rover
 
-The Pi 5 / Jetson code must not change when the real robot arrives. Everything they touch is
-defined in [INTERFACE.md](INTERFACE.md); this document is the checklist for making the real
-rover satisfy that contract.
+Because the sim **impersonates** the real robot's contract exactly (captured intrinsics,
+wall-clock stamps, firmware-emulated `/cmd_vel` — see [INTERFACE.md](INTERFACE.md)), the
+Jetson and Pi 5 code does not change at all. Switching between sim and real is a single
+config flip on the Jetson.
 
-The real rover is intentionally simple — matching what the sim models:
+## The switch
 
-- 4-wheel mecanum base (ESP32 + micro-ROS to the Pi5's agent, or a ros2_control hardware
-  interface)
-- one RealSense D555 (RGBD + built-in IMU) — the only exteroceptive sensor
-
-## What gets replaced
-
-| Sim component | Real-robot replacement |
-|---|---|
-| Gazebo physics + `gz_ros2_control` | Motor driver: ESP32 via micro-ROS (UDP 8888 to the Pi5 agent) or a ros2_control hardware interface running `mecanum_drive_controller` |
-| Simulated RGBD cam + IMU → `/cam_1/*`, `/cam_1/imu` | `realsense-ros` driver, `camera_name:=cam_1`, depth aligned, `unite_imu_method:=2` (linear_interpolation) so the IMU comes out united on `/cam_1/imu` |
-| `rover_gazebo` worlds | The actual house |
-| `/clock` + `use_sim_time:=true` everywhere | Wall clock — `use_sim_time:=false` on every machine |
-
-Suggested real camera bringup (run wherever the D555 is plugged in — Jetson):
+On the Jetson (`~/robot`):
 
 ```bash
-ros2 launch realsense2_camera rs_launch.py \
-  camera_name:=cam_1 camera_namespace:=/ \
-  align_depth.enable:=true unite_imu_method:=2 \
-  enable_gyro:=true enable_accel:=true \
-  depth_module.depth_profile:=424x240x15 rgb_camera.color_profile:=424x240x15
+echo real > config/hardware   # was: sim
+robot restart
+scripts/check_contract.sh     # must be as green as sim mode
 ```
 
-Then verify the topic names match INTERFACE.md exactly (`ros2 topic list | grep cam_1`);
-adjust profiles upward once the Jetson pipelines are happy.
+`sim` mode expects the laptop pipeline (`fleet_sim.sh start`) up; `real` mode brings up the
+physical drivers below instead. Same topics, same frames, same firmware behavior either way.
 
-## What stays identical
+## What each side provides
 
-- All topic names, types, frames — this is the contract
-- `rover_description` URDF minus the gazebo plugins (update wheel radius / separation and
-  the measured camera mount pose; keep frame names)
-- `mecanum_drive_controller` + `rover_description/config/*/ros2_controllers.yaml` if the
-  real base uses ros2_control — only the hardware plugin line changes from
-  `gz_ros2_control/GazeboSimSystem` to your hardware interface
-- Everything on the Jetson (SLAM, nvblox, Nav2) and the Pi 5 (brain) — by construction
+| Contract element | Sim source | Real source |
+|---|---|---|
+| `/camera/camera0/*` (color, infra1, depth, motion) | gz D555 rig → `rover_contract` restamper/bridge | `realsense-ros`, `camera_name:=camera0`, aligned depth, `unite_imu_method:=2` |
+| depth format | restamper casts 32FC1 m → 16UC1 mm | driver already 16UC1 mm |
+| wall-clock stamps | restamper stamps `now()` | driver stamps real time |
+| captured `/tf_static` | `contract_bridge.py` replays `d555_contract/*.yaml` | the real camera + `run_robot_tf.sh` |
+| `/cmd_vel` behavior | `contract_bridge.py` firmware port → gz DiffDrive | `rover_firmware.ino` on the ESP32 via micro-ROS (UDP 8888 → Pi5 agent) |
+| `map→odom` / pose | Jetson visual SLAM (unchanged) | Jetson visual SLAM (unchanged) |
 
-## Procedure
+## The one thing to keep in sync
 
-1. Bring up the real base; verify `/mecanum_drive_controller/cmd_vel` (TwistStamped) moves
-   it and `/mecanum_drive_controller/odom` responds (or remap the driver's topics to these
-   names). Confirm the `odom → base_footprint` TF is broadcast.
-2. Bring up the D555 with the launch above; verify frames match the URDF
-   (`ros2 run tf2_tools view_frames`) and `/cam_1/imu` streams (~200 Hz).
-3. Publish the URDF with `robot_state_publisher` (`use_gazebo:=false`,
-   `use_sim_time:=false`) so the static camera TF exists.
-4. Flip every Jetson/Pi5 node to `use_sim_time:=false`.
-5. Point the Jetson pipelines at the robot — nothing on their side changes except VIO/IMU
-   noise parameters, which must be re-tuned on the real (noisy) IMU.
+`rover_contract/scripts/contract_bridge.py` is a **port of `rover_firmware.ino`**
+(`PWM_MIN`, `MAX_LINEAR_VEL`, `MAX_ANGULAR_VEL`, `DEAD_STICK`, `CMD_TIMEOUT_S`, `TRACK`). If
+the real firmware's constants change, change them in the port too, or sim and real drive
+differently. This is the only intentional code duplication in the fleet.
 
-## Launch-file rule that makes this work
+## Recapturing the D555 contract
 
-Keep "robot" launch files free of sim-only nodes. Gazebo, the ros_gz bridge, and the spawner
-live only in `rover_gazebo`; `rover_bringup` composes either the sim or the real robot under
-the same downstream stack.
+`rover_contract/d555_contract/` holds camera_infos + the static frame tree **captured from
+the real camera** — never hand-edit them. If the real camera, its mount, or its resolution
+changes, recapture (record `/camera/camera0/*/camera_info` and `/tf_static` from the real
+driver, save the yamls) and rebuild. The sim's gz intrinsics (hfov in `models/rover/model.sdf`)
+should then be re-derived from the new `fx`.
+
+## Divergences that remain on the real robot
+
+None that the stack sees — but be aware the sim's known gaps (centered principal point,
+noise-free IMU, easier skid-steer turns; see INTERFACE.md) mean anything tuned *against the
+sim* — VIO noise models, low-speed controller gains — must be re-checked on real hardware.

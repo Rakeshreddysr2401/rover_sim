@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rover_contract</name>
+  <version>0.1.0</version>
+  <description>
+    D555/ESP32 impersonation layer: republishes the sim's internal topics as
+    the exact real-robot contract (/camera/camera0/*, wall-clock stamps,
+    captured real intrinsics + static frame tree) and emulates the rover
+    firmware's /cmd_vel behavior (PWM deadband, watchdog). The Jetson/Pi5
+    stack runs unchanged and cannot tell it is in simulation.
+  </description>
+  <maintainer email="rohit.kalavapudi@gmail.com">Rakhi Fleet</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

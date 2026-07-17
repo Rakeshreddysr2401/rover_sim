@@ -2,100 +2,129 @@
 # Start/stop/status for the sim as a FLEET MEMBER (called by the Pi5's
 # scripts/fleet.sh over ssh, or run directly on this laptop).
 #
-#   ./fleet_sim.sh start    # idempotent; GUI if a display is up, else headless
+#   ./fleet_sim.sh start    # idempotent, headless; the whole 4-stage pipeline
+#   ./fleet_sim.sh status   # prints the /rover_sim/status counters
 #   ./fleet_sim.sh stop
-#   ./fleet_sim.sh status
+#   ./fleet_sim.sh gui      # attach a Gazebo GUI to the running headless server
 #
-# Env overrides: WORLD=house|cafe|empty (default house).
+# The sim IMPERSONATES THE REAL ROVER (imported from ~/langrobo/rover_sim,
+# 2026-07-17): a 4-wheel skid-steer base + RealSense D555 rig publishing the
+# exact hardware contract — /camera/camera0/* with wall-clock stamps and the
+# captured real intrinsics/frame tree, /cmd_vel consumed through a
+# byte-accurate port of the ESP32 firmware (PWM deadband, 500ms watchdog).
+# The Jetson/Pi5 stack runs unchanged and cannot tell it is in simulation.
+# Contract: docs/INTERFACE.md.
 #
-# The sim is a stand-in for the REAL ROVER ONLY: 4-wheel mecanum base + a
-# D555-style depth camera with built-in IMU + the world. No Nav2/SLAM/EKF here —
-# mapping and navigation (cuVSLAM/RTABMap, nvblox, Nav2) run on the Jetson,
-# reasoning on the Pi5. See docs/INTERFACE.md.
+#   stage 1  gz sim (headless server, RTF 1.0)   world + rover model
+#   stage 2  ros_gz parameter_bridge             gz <-> ROS, internal /rover_sim/*
+#   stage 3  rover_contract restamper (C++)      contract names, wall stamps, 16UC1 depth
+#   stage 4  rover_contract contract_bridge.py   imu remap, firmware emu, tf, status
 #
-# Joins the Pi5 discovery server via fleet_env.sh; if the Pi5 is unreachable
-# the sim still starts, standalone (plain local discovery).
+# NOTE: wall-clock stamps require RTF ~= 1.0, so the fleet world is the small
+# langrobo_home room. house/cafe (0.1 RTF on this iGPU) are kept in
+# rover_gazebo/worlds as assets only — they'd break stamp parity here.
 
 set -eo pipefail
 CMD="${1:-status}"
-WORLD="${WORLD:-house}"
-
-if [ -n "${MODE:-}" ]; then
-    echo "fleet_sim: NOTE: MODE=$MODE ignored — SLAM/Nav2 moved to the Jetson (this sim is rover+camera+world only)"
-fi
+WORLD="${WORLD:-langrobo_home}"
 
 WS=/workspace/ros2_ws
 LOG_DIR="$WS/logs"
-LOG="$LOG_DIR/fleet_sim.log"
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Isolate this sim's gz-transport from any other Gazebo instance on the
+# machine (without this, a second gz server steals the robot spawn: the
+# world-list/create requests cross-talk). Debug shells must match:
+#   GZ_PARTITION=rover_sim gz topic -l
+export GZ_PARTITION=rover_sim
+
+setup_env() {
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source "$WS/install/setup.bash"
+    set -u
+    # Parity stack runs on plain domain-0 discovery (verified working
+    # 2026-07-17); the Pi5 discovery-server scheme is NOT used on this path —
+    # reconcile with NETWORKING.md before changing either.
+    unset ROS_DISCOVERY_SERVER FASTRTPS_DEFAULT_PROFILES_FILE
+    export ROS_DOMAIN_ID=0
+    GZ_SHARE=$(ros2 pkg prefix rover_gazebo)/share/rover_gazebo
+    CONTRACT_SHARE=$(ros2 pkg prefix rover_contract)/share/rover_contract
+    export GZ_SIM_RESOURCE_PATH="$GZ_SHARE/models"
+}
 
 stop_sim() {
-    # Kill ONLY this repo's sim. Patterns are anchored to rover_gazebo paths /
-    # this launch's names — a plain "[g]z sim" pattern once killed an unrelated
-    # Gazebo instance (~/langrobo) that happened to be running on this laptop.
-    # Bracket trick so pkill doesn't match this script's own command line.
-    pkill -9 -f "[r]over.gazebo.launch" 2>/dev/null || true
-    pkill -9 -f "gz sim.*[r]over_gazebo/share" 2>/dev/null || true
-    pkill -9 -f "[p]arameter_bridge --ros-args --params-file" 2>/dev/null || true
-    pkill -9 -f "[i]mage_bridge.*cam_1" 2>/dev/null || true
-    pkill -9 -f "[r]obot_state_publisher --ros-args" 2>/dev/null || true
-    pkill -9 -f "[r]viz2.*rover" 2>/dev/null || true
+    # Kill ONLY this repo's sim (patterns anchored to our paths/topic names —
+    # a plain "gz sim" pattern once killed an unrelated Gazebo instance).
+    pkill -f "[c]ontract_bridge.py" 2>/dev/null || true
+    pkill -f "[r]over_contract/restamper" 2>/dev/null || true
+    pkill -f "[p]arameter_bridge.*rover_sim/" 2>/dev/null || true
+    pkill -f "gz sim.*[r]over_gazebo/share" 2>/dev/null || true
+    pkill -9 -f "ruby.*gz sim.*[r]over_gazebo/share" 2>/dev/null || true
     sleep 1
 }
 
 sim_running() {
-    pgrep -f "[r]over.gazebo.launch" >/dev/null
+    pgrep -f "gz sim.*[r]over_gazebo/share" >/dev/null
 }
 
 case "$CMD" in
 start)
     if sim_running; then
-        echo "fleet_sim: already running (WORLD of the running instance unchanged)"
+        echo "fleet_sim: already running"
         exit 0
     fi
     stop_sim
     mkdir -p "$LOG_DIR"
+    setup_env
 
-    set +u
-    source /opt/ros/jazzy/setup.bash
-    source "$WS/install/setup.bash"
-    # Join the fleet meeting point (no-op locally if Pi5 is down: env just
-    # points at an unreachable server, so fall back to standalone instead).
-    if getent ahostsv4 rakhi24-desktop.local >/dev/null 2>&1; then
-        source "$SELF_DIR/fleet_env.sh"
-    else
-        echo "fleet_sim: Pi5 not resolvable — starting STANDALONE (local discovery)"
-    fi
-    set -u
-
-    # GUI when this laptop has a live display session; headless otherwise
-    # (e.g. started over ssh with nobody logged in).
-    HEADLESS=True
-    if [ -e /tmp/.X11-unix/X0 ]; then
-        export DISPLAY="${DISPLAY:-:0}"
-        XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-        [ -n "$XAUTH" ] && export XAUTHORITY="$XAUTH"
-        if xset q >/dev/null 2>&1; then HEADLESS=False; fi
+    WORLD_FILE="$GZ_SHARE/worlds/${WORLD}.sdf"
+    if [ ! -f "$WORLD_FILE" ]; then
+        echo "fleet_sim: [FAIL] no such world: $WORLD_FILE" >&2
+        echo "  (only langrobo_home embeds the rover; house/cafe are assets only)" >&2
+        exit 1
     fi
 
-    if [ "$WORLD" = "cafe" ]; then SPAWN_Z=0.20; else SPAWN_Z=0.05; fi
+    echo "fleet_sim: [1/4] gz sim (headless, ${WORLD}.sdf)"
+    # gz stamps start at sim-time 0; the restamper rewrites them to the wall
+    # clock. Do NOT use --initial-sim-time with an epoch value — it silently
+    # breaks all sensor/stats scheduling (found live 2026-07-17).
+    nohup setsid gz sim -s -r --headless-rendering \
+        "$WORLD_FILE" > "$LOG_DIR/gz_sim.log" 2>&1 < /dev/null &
+    for i in $(seq 1 30); do
+        gz topic -l 2>/dev/null | grep -q "/rover_sim/infra1/image" && break
+        [ "$i" = 30 ] && { echo "fleet_sim: [FAIL] gz sensors never came up — $LOG_DIR/gz_sim.log" >&2; exit 1; }
+        sleep 2
+    done
+    echo "fleet_sim:   [ok] world + sensors up"
 
-    # Isolate this sim's gz-transport from any other Gazebo instance on the
-    # machine (without this, a second gz server steals the robot spawn: the
-    # world-list/create requests cross-talk). Debug shells must match:
-    #   GZ_PARTITION=rover_sim gz topic -l
-    export GZ_PARTITION=rover_sim
+    echo "fleet_sim: [2/4] ros_gz parameter_bridge (internal /rover_sim names)"
+    nohup ros2 run ros_gz_bridge parameter_bridge \
+        /rover_sim/infra1/image@sensor_msgs/msg/Image[gz.msgs.Image \
+        /rover_sim/infra1/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo \
+        /rover_sim/depth/image@sensor_msgs/msg/Image[gz.msgs.Image \
+        /rover_sim/depth/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo \
+        /rover_sim/color/image@sensor_msgs/msg/Image[gz.msgs.Image \
+        /rover_sim/color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo \
+        /rover_sim/imu@sensor_msgs/msg/Imu[gz.msgs.IMU \
+        /rover_sim/drive_cmd@geometry_msgs/msg/Twist]gz.msgs.Twist \
+        > "$LOG_DIR/gz_bridge.log" 2>&1 &
+    sleep 3
+    echo "fleet_sim:   [ok] bridge up"
 
-    echo "fleet_sim: starting WORLD=$WORLD headless=$HEADLESS (log: $LOG)"
-    # enable_odom_tf: the robot owns odom->base_footprint (wheel odometry);
-    # the Jetson's SLAM provides map->odom on top (REP-105 split).
-    nohup ros2 launch rover_gazebo rover.gazebo.launch.py \
-        enable_odom_tf:=true headless:=$HEADLESS \
-        use_rviz:=$([ "$HEADLESS" = "False" ] && echo true || echo false) \
-        jsp_gui:=false load_controllers:=true use_sim_time:=true \
-        world_file:=${WORLD}.world x:=0.0 y:=0.0 z:=$SPAWN_Z > "$LOG" 2>&1 &
-    disown
-    echo "fleet_sim: launched (drive ready when status reports 2/2 controllers; check with: $0 status)"
+    echo "fleet_sim: [3/4] restamper (C++: contract names, wall stamps, depth 16UC1)"
+    nohup ros2 run rover_contract restamper > "$LOG_DIR/restamper.log" 2>&1 &
+    echo "fleet_sim:   [ok] restamper up"
+
+    echo "fleet_sim: [4/4] contract bridge (imu + drive emulation + tf + marker)"
+    nohup ros2 run rover_contract contract_bridge.py \
+        --contract "$CONTRACT_SHARE/d555_contract" --role motion \
+        > "$LOG_DIR/contract_bridge.log" 2>&1 &
+    sleep 3
+    timeout 10 ros2 topic echo --once /rover_sim/status >/dev/null 2>&1 \
+        && echo "fleet_sim:   [ok] contract topics live" \
+        || { echo "fleet_sim: [FAIL] contract bridge — $LOG_DIR/contract_bridge.log" >&2; exit 1; }
+
+    echo "fleet_sim: UP — /camera/camera0/* publishing on domain 0 (logs: $LOG_DIR)"
     ;;
 stop)
     stop_sim
@@ -106,23 +135,24 @@ status)
         echo "fleet_sim: NOT running"
         exit 1
     fi
-    set +u
-    source /opt/ros/jazzy/setup.bash >/dev/null 2>&1
-    source "$WS/install/setup.bash" >/dev/null 2>&1
-    # Mirror the discovery env the sim was started with, or this shell can't
-    # see its nodes. SUPER_CLIENT lets CLI introspection work via the server.
-    if getent ahostsv4 rakhi24-desktop.local >/dev/null 2>&1; then
-        source "$SELF_DIR/fleet_env.sh" >/dev/null
-        export ROS_SUPER_CLIENT=TRUE
+    setup_env >/dev/null 2>&1
+    S=$(timeout 10 ros2 topic echo --once --field data /rover_sim/status 2>/dev/null | head -1)
+    if [ -n "$S" ]; then
+        echo "fleet_sim: running — $S"
+    else
+        echo "fleet_sim: gz up but contract bridge NOT publishing status" >&2
+        exit 1
     fi
-    set -u
-    # Probe via services (reliable through the discovery server; `ros2
-    # lifecycle get` / node lists are not — see NETWORKING.md red herring).
-    CTRL=$(timeout 10 ros2 control list_controllers 2>/dev/null | grep -c "active" || true)
-    echo "fleet_sim: running — active controllers: ${CTRL:-0}/2 (2 = drive ready)"
+    ;;
+gui)
+    if ! sim_running; then
+        echo "fleet_sim: NOT running (start first)"
+        exit 1
+    fi
+    exec gz sim -g
     ;;
 *)
-    echo "usage: $0 {start|stop|status}   (env: WORLD=house|cafe|empty)"
+    echo "usage: $0 {start|stop|status|gui}   (env: WORLD=langrobo_home)"
     exit 2
     ;;
 esac
