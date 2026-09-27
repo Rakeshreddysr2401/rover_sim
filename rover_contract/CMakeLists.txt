@@ -12,7 +12,11 @@ target_link_libraries(restamper PUBLIC rclcpp::rclcpp ${sensor_msgs_TARGETS})
 install(TARGETS restamper DESTINATION lib/${PROJECT_NAME})
 
 # Python path: imu remap, firmware emulation, captured static TF, status marker
-install(PROGRAMS scripts/contract_bridge.py DESTINATION lib/${PROJECT_NAME})
+# + the parity gate that asserts the contract (green on sim == green on real).
+install(PROGRAMS
+  scripts/contract_bridge.py
+  scripts/check_contract.sh
+  DESTINATION lib/${PROJECT_NAME})
 
 # Captured REAL D555 data (camera_infos + static frame tree). Never edit by
 # hand — recapture from the real camera.
